@@ -5,6 +5,8 @@ from pathlib import Path
 from tqdm import tqdm
 import logging
 import re
+from botocore.config import Config
+import urllib3
 
 def parse_s3_url(s3_url):
     """Parse s3://bucket-name/prefix into bucket and prefix."""
@@ -34,9 +36,27 @@ def sync_s3_bucket(s3_url, local_dir, aws_profile=None, max_workers=10):
     # Parse S3 URL
     bucket_name, prefix = parse_s3_url(s3_url)
     
+    # Configure boto3 client with appropriate connection pool settings
+    max_pool_connections = max_workers + 10  # Add some buffer for list operations
+    config = Config(
+        max_pool_connections=max_pool_connections,
+        retries=dict(max_attempts=3),  # Add retry configuration
+        connect_timeout=60,            # Increase timeouts for large files
+        read_timeout=60
+    )
+    
     # If no profile is specified, boto3 will use instance profile credentials
     session = boto3.Session(profile_name=aws_profile) if aws_profile else boto3.Session()
-    s3_client = session.client('s3')
+    
+    # Create S3 client with the custom config
+    s3_client = session.client('s3', config=config)
+    
+    # Configure the underlying urllib3 pool manager
+    urllib3_pool = urllib3.PoolManager(
+        maxsize=max_pool_connections,
+        retries=urllib3.Retry(3),
+        timeout=urllib3.Timeout(connect=60, read=60)
+    )
     
     logging.basicConfig(
         filename='s3_sync.log',
@@ -92,5 +112,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     sync_s3_bucket(args.s3_url, args.local_dir, args.profile, args.workers)
-
 
